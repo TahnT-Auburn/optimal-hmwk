@@ -1,0 +1,344 @@
+%% Optimal Homework 3 - Problem 4
+% Tahn Thawainin
+
+clc
+clear variables
+close all
+
+%% Simulation Specs
+
+% simulation time
+t_sim = 100;
+
+% sampling rate
+dt = 0.1;
+
+% time
+t = 0:dt:t_sim;
+
+%% Dynamics (Continuous)
+
+% original dynamics
+% state trasition matrix
+Ao = [-2.62, 12;
+     -0.96, -2];
+
+% control matrix
+Bo = [14; 1];
+
+% model type
+% 0 - unloaded
+% 1 - loaded
+modelType = 0;
+
+if modelType == 0
+
+% state trasition matrix
+A = [-2.62, 12;
+     -0.96, -2];
+
+% control matrix
+B = [14; 1];
+
+% observation matrix
+C = [1, 0];
+
+% measurement input matrix
+D = 0;
+
+elseif modelType == 1
+
+% state trasition matrix
+A = [-2.42, 4;
+     -0.99, -2];
+
+% control matrix
+B = [18; 1];
+
+% observation matrix
+C  = [1, 0];
+
+
+% measurement input matrix
+D = 0;
+
+end
+
+%% Input
+
+% input steer angle(deg)
+steer_ang = 45;
+u = deg2rad(steer_ang)*ones(1, length(t));
+
+%% Discretize
+
+% state transition
+Ad = expm(Ao*dt);
+
+% discrete input matrix
+Bd = dt.*Bo;
+
+%% Simulate System
+
+% simulation observation matrix
+C_sim = [1, 0;
+         0, 1];
+
+% continuos system
+contSys = ss(A,B,C_sim,D);
+
+% continuous sim (MATLAB func)
+yc = lsim(contSys, u, t);
+
+% discrete sim (MATLAB func)
+yd = dlsim(Ad, Bd, C_sim, D, u);
+
+% manual simulation
+% initialize
+psi_d = 0;
+psi_dd = 0;
+beta = 0;
+beta_d = 0;
+
+for i = 1:length(t)
+    
+    % yaw acceleration
+    psi_dd = A(1,1)*psi_d + A(1,2)*beta + B(1,1)*u(i);
+
+    % sideslip rate
+    beta_d = A(2,1)*psi_d + A(2,2)*beta + B(2,1)*u(i);
+
+    % integrate for states
+    psi_d = psi_d + psi_dd*dt;
+    beta = beta + beta_d*dt;
+
+    % siphon variables
+    yaw_accel(i) = psi_dd;
+    yaw_rate(i) = psi_d;
+    side_slip_rate(i) = beta_d;
+    side_slip(i) = beta;
+
+end
+
+%% Measurements
+
+% measurement condition - specificy available measurements
+% 1 - access to yaw rate measurements
+% 2 - access to yaw rate and sideslip measurements
+measCond = 2;
+
+% yaw rate measurement STD
+sigma_yr = 0.1;
+
+% sideslip measurement STD
+sigma_ss = 0.5;
+
+% yaw rate measurement
+yr_meas = yaw_rate + sigma_yr*randn(1, length(t));
+
+% sideslip measurement
+ss_meas = side_slip + sigma_ss*randn(1, length(t));
+
+if measCond == 1
+
+    % KF measurements
+    y = yr_meas;
+    
+elseif measCond == 2
+    
+    % update observation matrix
+    C  = [1, 0;
+          0, 1];
+
+    % KF measurements
+    y = [yr_meas;
+         ss_meas];
+end
+
+%% Noise Parameters
+
+% process noise
+Qd = [0.01, 0;
+     0, 0.01];
+
+if measCond == 1
+
+% measurement noise
+R = 0.01;
+
+elseif measCond == 2
+
+% measurement noise
+R = [0.001, 0;
+     0, 0.01];
+end
+
+%% Kalman Filter
+
+% initialize
+x_init = [0; 0];
+P_init = [10, 0;
+          0, 10];
+
+x = x_init;
+P = P_init;
+
+for i = 1:length(t)
+
+    % time update
+    x = Ad*x + Bd*u(i);
+    
+    P = Ad*P*Ad' + Qd;
+    
+    % measurement update
+    K = P*C'*inv(C*P*C' + R);
+
+    P = (eye(2) - K*C)*P;
+    
+    if measCond == 1    
+    x = x + K*(y(i) - C*x);  
+    elseif measCond == 2
+    x = x + K*(y(:,i) - C*x);
+    end
+
+    % siphon variables
+    yaw_rate_est(i) = x(1);
+    side_slip_est(i) = x(2);
+
+    kalmanGain(:,:,i) = K;
+    covar(:,:,i) = P;
+ 
+end
+
+%% Steady-State Analysis
+
+for i = 2:length(t)
+    
+    if mod(kalmanGain(:,:,i), kalmanGain(:,:,i-1)) < 0.0001
+
+        % steady state kalman gain
+        Kss = kalmanGain(:,:,i);
+
+        % closed loop estimator
+        A_KF = Ad - Kss*C;
+
+        % estimator eigenvalues
+        eig_KF = eig(A_KF);
+
+    else
+        continue
+    end
+end
+
+%% Interface
+% 0 - false
+% 1 - true
+
+% display simulation info
+disp_sim = 1;
+% display solution info
+disp_sol = 1;
+
+% RGB Triplets
+darkBlue = [0 0.4470 0.7410];
+orange = [0.8500 0.3250 0.0980];
+yellow = [0.9290 0.6940 0.1250];
+purple = [0.4940 0.1840 0.5560];
+green = [0.4660 0.6740 0.1880];
+lightBlue = [0.3010 0.7450 0.9330];
+red = [0.6350 0.0780 0.1840];
+
+
+% simulation info
+if disp_sim == 1
+    
+    % system config
+    if modelType == 0
+        disp('Load Condition: Unloaded')
+    elseif modelType == 1
+        disp('Load Condition: Loaded')
+    end
+    
+    % measurement status
+    if measCond == 1
+        disp('Available Measurements: yaw rate')
+    elseif measCond == 2
+        disp('Available Measurements: yaw rate, side slip')
+    end
+
+    % simulated states
+    figure
+    subplot(2,1,1)
+    plot(t, yaw_rate, LineWidth = 2)
+    title('Simulated Yaw Rate and Sideslip')
+    ylabel('Yaw Rate (rad/s)')
+    xlim([0, 5])
+    subplot(2,1,2)
+    plot(t, side_slip)
+    ylabel('Side Slip (rad)')
+    xlabel('Time [s]')
+    xlim([0, 5])
+    set(gcf, 'color', 'w')
+
+elseif disp_sim == 0
+end
+
+
+% KF solution info
+if disp_sol == 1
+    
+    % KF specs
+    disp('Process Noise')
+    disp(Qd)
+    disp('Measurement Noise')
+    disp(R)
+    
+    if measCond == 1
+    % comparision plots
+    figure
+    subplot(2,1,1)
+    hold on
+    plot(t, yaw_rate, '--', DisplayName ='Truth', LineWidth = 2)
+    plot(t, yaw_rate_est, DisplayName ='KF', LineWidth = 2)
+    plot(t, yr_meas, '.', 'MarkerSize', 12,  color = green, DisplayName ='Measurements')
+    hold off
+    ylabel('Yaw Rate (rad/s)')
+    title('Kalman Filter Yaw Rate and Sideslip Angle Estimates')
+    legend(Location='best')
+    xlim([0, 5])
+    set(gcf, 'color', 'w') 
+    subplot(2,1,2)
+    hold on
+    plot(t, side_slip, '--', DisplayName='Truth',LineWidth=2)
+    plot(t, side_slip_est, DisplayName='KF',LineWidth=2)
+    xlabel('Time [s]')
+    ylabel('Side Slip (rad)')
+    xlim([0, 5])
+    set(gcf, 'color', 'w')
+    
+    elseif measCond == 2
+    figure
+    subplot(2,1,1)
+    hold on
+    plot(t, yaw_rate, '--', DisplayName ='Truth', LineWidth = 2)
+    plot(t, yaw_rate_est, DisplayName ='KF', LineWidth = 2)
+    plot(t, yr_meas, '.', 'MarkerSize', 12,  color = green, DisplayName ='Measurements')
+    hold off
+    ylabel('Yaw Rate (rad/s)')
+    title('Kalman Filter Yaw Rate and Sideslip Angle Estimates')
+    legend(Location='best')
+    xlim([0, 5])
+    set(gcf, 'color', 'w') 
+    subplot(2,1,2)
+    hold on
+    plot(t, side_slip, '--', DisplayName='Truth',LineWidth=2)
+    plot(t, side_slip_est, DisplayName='KF',LineWidth=2)
+    plot(t, ss_meas, '.', 'MarkerSize', 12,  color = green, DisplayName ='Measurements')
+    xlabel('Time [s]')
+    ylabel('Side Slip (rad)')
+    xlim([0, 5])
+    set(gcf, 'color', 'w')
+    end 
+
+elseif disp_sol == 0
+end
